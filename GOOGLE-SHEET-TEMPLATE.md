@@ -1,25 +1,34 @@
-# Google Sheet Template Setup
+# Google Sheet Template Structure
 
-This document explains how to set up the Google Sheet template for the LastFM Event Notifier.
+This project uses one personal Google Sheet per user.
 
-## Step 1: Create a Google Sheet
-1. Go to Google Sheets: [Google Sheets](https://sheets.google.com)
-2. Click on **Blank** or choose a template if you want.
+## Tab 1 — Config
 
-## Step 2: Set Up Your Columns
-- **Column A:** Event Name  
-- **Column B:** Event Date  
-- **Column C:** Event Location  
-- **Column D:** URL to Event Details  
+This tab stores personal settings.
 
-Make sure to format the date properly (YYYY-MM-DD).
+| key | value |
+|---|---|
+| lastfm_username | your_lastfm_username |
+| city | Berlin |
+| email | your@email.com |
+| min_listens | 50 |
+| alerts_active | TRUE |
 
-## Step 3: Share Your Sheet
-1. Click on **Share** in the top right corner.
-2. Set your sharing preferences to allow the LastFM Event Notifier to access your sheet.
+### Notes
+- `lastfm_username`: your Last.fm username
+- `city`: the city used for event search
+- `email`: where alerts are sent
+- `min_listens`: minimum number of listens in the last 2 years for an artist to qualify
+- `alerts_active`: set to `TRUE` or `FALSE`
 
-## Step 4: Link to LastFM Event Notifier
-Once your Google Sheet is set up, link it with the LastFM Event Notifier to automatically fetch events. Follow the instructions in the notifier documentation for detailed integration steps.
+## Tab 2 — SentAlerts
 
-## Conclusion
-You have now set up your Google Sheet template for the LastFM Event Notifier. Make sure to keep your event information updated for optimal performance!
+This tab stores all previously emailed events to avoid duplicates.
+
+| event_key | artist_name | event_date | venue | source | sent_at |
+
+## Tab 3 — Matches
+
+This tab stores the latest matched results for visibility and debugging.
+
+| checked_at | artist_name | playcount | event_date | venue | source | ticket_url | event_key |
