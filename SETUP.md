@@ -1,46 +1,106 @@
-# SETUP.md for Last.fm Event Notifier
+# Setup Guide
 
-## Project Overview
-The Last.fm Event Notifier is an application that notifies users of upcoming events based on their music preferences. It connects to the Last.fm API to retrieve event information and provides notifications in real-time.
+This project is a self-serve Google Sheets + Apps Script template.
 
-## Prerequisites
-Before you begin, ensure you have met the following requirements:
-- **Node.js**: Version 14 or newer.
-- **npm**: Version 6 or newer.
+Each person sets it up in their own Google account.
 
-## Installation Instructions
+## Step 1 — Create your Google Sheet
 
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/akayaci/lastfm-event-notifier.git
-   ```
-2. **Navigate into the project directory**
-   ```bash
-   cd lastfm-event-notifier
-   ```
-3. **Install dependencies**
-   ```bash
-   npm install
-   ```
+Create a new Google Sheet.
 
-## Configuration
-1. Create a `.env` file in the root of the project and add your Last.fm API key:
-   ```env
-   LASTFM_API_KEY=your_api_key_here
-   ```
-   
-2. Configure any additional settings as outlined in the project's documentation.
+Suggested name:
 
-## Running the Application
-To start the application, run:
-```bash
-npm start
-```
+`Last.fm Concert Alerts`
 
-## Troubleshooting
-If you encounter issues, consider the following:
-- Ensure all dependencies are installed correctly.
-- Check that your API keys are valid and configured properly.
+## Step 2 — Add the required tabs
 
-## Contributing
-If you would like to contribute to this project, please fork the repository and submit a pull request with your changes.
+Create these tabs:
+
+- `Config`
+- `SentAlerts`
+- `Matches`
+
+See `GOOGLE-SHEET-TEMPLATE.md` for the exact layout.
+
+## Step 3 — Open Apps Script
+
+From your Google Sheet:
+
+`Extensions → Apps Script`
+
+A new Apps Script project will open.
+
+## Step 4 — Paste the script
+
+Copy the contents of `apps-script.gs` from this repository.
+
+Paste it into `Code.gs` in Apps Script.
+
+Remove any default code first.
+
+## Step 5 — Add Script Properties
+
+In Apps Script:
+
+`Project Settings → Script Properties`
+
+Add the following keys:
+
+- `LASTFM_API_KEY`
+- `TM_API_KEY`
+
+Set each value using your own API keys.
+
+## Step 6 — Fill the Config tab
+
+In your `Config` tab, add your own values:
+
+- `lastfm_username`
+- `city`
+- `email`
+- `min_listens`
+- `alerts_active`
+
+Example:
+
+| key | value |
+|---|---|
+| lastfm_username | your_lastfm_username |
+| city | Berlin |
+| email | your@email.com |
+| min_listens | 50 |
+| alerts_active | TRUE |
+
+## Step 7 — Run setup and tests
+
+Run the setup/test functions from Apps Script one by one.
+
+Recommended order:
+1. setup
+2. testLastfm
+3. testEvents
+4. testEmail
+
+You will be asked to grant permissions the first time.
+
+## Step 8 — Create the daily trigger
+
+In Apps Script:
+- open Triggers
+- add a new trigger
+- choose the main alert function
+- choose time-driven
+- run daily
+
+## Step 9 — Stop alerts anytime
+
+To stop alerts, go to the `Config` tab and set:
+
+`alerts_active = FALSE`
+
+## Notes
+
+- each person must use their own sheet
+- each person must use their own API keys
+- alerts are only sent for newly found matching events
+- already sent events are stored in `SentAlerts`
