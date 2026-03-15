@@ -28,7 +28,7 @@ function runAlerts() {
     throw new Error('Missing required config values: lastfm_username, city, or email');
   }
 
-  const minListens = Number(settings.min_listens ||25);
+  const minListens = settings.min_listens;
 
   Logger.log(`Running alerts for ${settings.lastfm_username} in ${settings.city}`);
 
@@ -68,7 +68,7 @@ const events = findAllEvents_(settings.city, qualifiedArtists);
 function testLastfm() {
   ensureSheets_();
   const settings = getConfig_();
-  const minListens = Number(settings.min_listens || 25);
+  const minListens = settings.min_listens;
 
   const artists = getQualifiedArtists_(settings.lastfm_username, minListens);
   Logger.log(`Total qualified artists: ${artists.length}`);
@@ -78,7 +78,7 @@ function testLastfm() {
 function testEvents() {
   ensureSheets_();
   const settings = getConfig_();
-  const minListens = Number(settings.min_listens || 50);
+  const minListens = settings.min_listens;
 
   const artists = getQualifiedArtists_(settings.lastfm_username, minListens);
   const events = findAllEvents_(settings.city, artists);
@@ -439,13 +439,30 @@ function getConfig_() {
     config[key] = value;
   }
 
+  const rawMinListens = config.min_listens;
+  const parsedMinListens = parseNumberOrDefault_(rawMinListens, 25);
+
+  Logger.log(`Raw min_listens from sheet: ${rawMinListens}`);
+  Logger.log(`Parsed min_listens: ${parsedMinListens}`);
+
   return {
     lastfm_username: String(config.lastfm_username || '').trim(),
     city: String(config.city || '').trim(),
     email: String(config.email || '').trim(),
-    min_listens: Number(config.min_listens || 25),
+    min_listens: parsedMinListens,
     alerts_active: toBoolean_(config.alerts_active),
   };
+}
+
+function parseNumberOrDefault_(value, defaultValue) {
+  if (value === null || value === undefined || value === '') {
+    return defaultValue;
+  }
+
+  const normalized = String(value).trim().replace(',', '.');
+  const parsed = Number(normalized);
+
+  return Number.isFinite(parsed) ? parsed : defaultValue;
 }
 
 function ensureSheets_() {
