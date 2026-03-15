@@ -5,10 +5,8 @@ const CONFIG = {
   LASTFM_BASE_URL: 'https://ws.audioscrobbler.com/2.0/',
   TM_BASE_URL: 'https://app.ticketmaster.com/discovery/v2/events.json',
   LOOKBACK_YEARS: 2,
-  LASTFM_PAGE_SIZE: 200,
-  MAX_LASTFM_PAGES: 25,
   TM_SIZE: 10,
-  MAX_ARTISTS_TO_SEARCH: 20,
+  MAX_WEEKLY_CHARTS: 110, // ~2 years + buffer
 };
 
 function setup() {
@@ -30,7 +28,7 @@ function runAlerts() {
     throw new Error('Missing required config values: lastfm_username, city, or email');
   }
 
-  const minListens = Number(settings.min_listens || 50);
+  const minListens = Number(settings.min_listens ||25);
 
   Logger.log(`Running alerts for ${settings.lastfm_username} in ${settings.city}`);
 
@@ -43,7 +41,7 @@ function runAlerts() {
     return;
   }
 
-  const events = findTicketmasterEvents_(settings.city, qualifiedArtists);
+const events = findAllEvents_(settings.city, qualifiedArtists);
   Logger.log(`Events found: ${events.length}`);
 
   writeMatches_(events);
@@ -70,10 +68,11 @@ function runAlerts() {
 function testLastfm() {
   ensureSheets_();
   const settings = getConfig_();
-  const minListens = Number(settings.min_listens || 50);
+  const minListens = Number(settings.min_listens || 25);
 
   const artists = getQualifiedArtists_(settings.lastfm_username, minListens);
-  Logger.log(JSON.stringify(artists.slice(0, 20), null, 2));
+  Logger.log(`Total qualified artists: ${artists.length}`);
+  Logger.log(JSON.stringify(artists, null, 2));
 }
 
 function testEvents() {
@@ -82,8 +81,10 @@ function testEvents() {
   const minListens = Number(settings.min_listens || 50);
 
   const artists = getQualifiedArtists_(settings.lastfm_username, minListens);
-  const events = findTicketmasterEvents_(settings.city, artists.slice(0, 5));
+  const events = findAllEvents_(settings.city, artists);
 
+  Logger.log(`Artists checked: ${artists.length}`);
+  Logger.log(`Events found: ${events.length}`);
   Logger.log(JSON.stringify(events, null, 2));
 }
 
@@ -124,65 +125,88 @@ function createDailyTrigger() {
 
 function getQualifiedArtists_(username, minListens) {
   const apiKey = getScriptProperty_('LASTFM_API_KEY');
+  const charts = getRelevantWeeklyCharts_(username, apiKey);
 
-  const cutoffDate = new Date();
-  cutoffDate.setFullYear(cutoffDate.getFullYear() - CONFIG.LOOKBACK_YEARS);
-  const cutoffUnix = Math.floor(cutoffDate.getTime() / 1000);
+  if (!charts.length) {
+    return [];
+  }
 
-  let page = 1;
-  let done = false;
   const counts = {};
 
-  while (!done && page <= CONFIG.MAX_LASTFM_PAGES) {
-    const params = {
-      method: 'user.getrecenttracks',
-      user: username,
-      api_key: apiKey,
-      format: 'json',
-      limit: CONFIG.LASTFM_PAGE_SIZE,
-      page: page,
-    };
+  charts.forEach(chart => {
+    try {
+      const weeklyArtists = getWeeklyArtistChart_(username, apiKey, chart.from, chart.to);
 
-    const data = fetchJson_(CONFIG.LASTFM_BASE_URL, params);
+      weeklyArtists.forEach(artist => {
+        const artistName = normalizeArtistName_(artist.name || '');
+        const playcount = Number(artist.playcount || 0);
 
-    if (data.error) {
-      throw new Error(`Last.fm error: ${data.message}`);
+        if (!artistName || !playcount) return;
+
+        counts[artistName] = (counts[artistName] || 0) + playcount;
+      });
+
+    } catch (error) {
+      Logger.log(`Skipping weekly chart ${chart.from}-${chart.to}: ${error.message}`);
     }
 
-    const tracks = (((data || {}).recenttracks || {}).track) || [];
-    if (!tracks.length) break;
-
-    for (let i = 0; i < tracks.length; i++) {
-      const track = tracks[i];
-
-      const uts = track.date && track.date.uts ? Number(track.date.uts) : null;
-      if (!uts) continue;
-
-      if (uts < cutoffUnix) {
-        done = true;
-        break;
-      }
-
-      const artistName = normalizeArtistName_(
-        track.artist && (track.artist['#text'] || track.artist.name || '')
-      );
-
-      if (!artistName) continue;
-
-      counts[artistName] = (counts[artistName] || 0) + 1;
-    }
-
-    page += 1;
-    Utilities.sleep(200);
-  }
+    Utilities.sleep(150);
+  });
 
   return Object.keys(counts)
     .map(name => ({
       artist_name: name,
       playcount: counts[name],
     }))
-    .filter(a => a.playcount >= minListens)
+    .filter(artist => artist.artist_name && artist.playcount >= minListens)
     .sort((a, b) => b.playcount - a.playcount);
+}
+
+function getRelevantWeeklyCharts_(username, apiKey) {
+  const params = {
+    method: 'user.getweeklychartlist',
+    user: username,
+    api_key: apiKey,
+    format: 'json',
+  };
+
+  const data = fetchJson_(CONFIG.LASTFM_BASE_URL, params);
+
+  if (data.error) {
+    throw new Error(`Last.fm error: ${data.message}`);
+  }
+
+  const allCharts = (((data || {}).weeklychartlist || {}).chart) || [];
+  const cutoffDate = new Date();
+  cutoffDate.setFullYear(cutoffDate.getFullYear() - CONFIG.LOOKBACK_YEARS);
+  const cutoffUnix = Math.floor(cutoffDate.getTime() / 1000);
+
+  return allCharts
+    .map(chart => ({
+      from: Number(chart.from),
+      to: Number(chart.to),
+    }))
+    .filter(chart => chart.to >= cutoffUnix)
+    .slice(-CONFIG.MAX_WEEKLY_CHARTS);
+}
+
+function getWeeklyArtistChart_(username, apiKey, fromTs, toTs) {
+  const params = {
+    method: 'user.getweeklyartistchart',
+    user: username,
+    api_key: apiKey,
+    from: fromTs,
+    to: toTs,
+    format: 'json',
+  };
+
+  const data = fetchJson_(CONFIG.LASTFM_BASE_URL, params);
+
+  if (data.error) {
+    throw new Error(`Last.fm error: ${data.message}`);
+  }
+
+  return (((data || {}).weeklyartistchart || {}).artist) || [];
 }
 
 function findTicketmasterEvents_(city, qualifiedArtists) {
@@ -190,7 +214,7 @@ function findTicketmasterEvents_(city, qualifiedArtists) {
   const allEvents = [];
   const seen = {};
 
-  qualifiedArtists.slice(0, CONFIG.MAX_ARTISTS_TO_SEARCH).forEach(artist => {
+  qualifiedArtists.forEach(artist => {
     const params = {
       apikey: apiKey,
       keyword: artist.artist_name,
@@ -206,8 +230,11 @@ function findTicketmasterEvents_(city, qualifiedArtists) {
       const eventDate = (((ev.dates || {}).start || {}).localDate) || '';
       const venue = ((((ev._embedded || {}).venues || [])[0] || {}).name) || '';
       const ticketUrl = ev.url || '';
+      const eventName = ev.name || '';
+      const attractionNames = getAttractionNames_(ev);
 
       if (!eventDate || !venue) return;
+      if (!isStrongArtistMatch_(artist.artist_name, eventName, attractionNames)) return;
 
       const eventKey = buildEventKey_(artist.artist_name, eventDate, venue, 'ticketmaster');
 
@@ -238,28 +265,75 @@ function findTicketmasterEvents_(city, qualifiedArtists) {
   return allEvents;
 }
 
-function sendAlertEmail_(settings, events) {
-  let body = '';
-  body += 'Hi,\n\n';
-  body += 'We found new concert matches for your Last.fm profile.\n\n';
-  body += `Last.fm username: ${settings.lastfm_username}\n`;
-  body += `City: ${settings.city}\n`;
-  body += `Minimum listens: ${settings.min_listens}\n\n`;
+function findAllEvents_(city, qualifiedArtists) {
+  const events = findTicketmasterEvents_(city, qualifiedArtists);
 
-  events.forEach((event, index) => {
-    body += `${index + 1}. ${titleCase_(event.artist_name)}\n`;
-    body += `Listens: ${event.playcount}\n`;
-    body += `Date: ${event.event_date}\n`;
-    body += `Venue: ${event.venue}\n`;
-    body += `Source: ${event.source}\n`;
-    body += `Ticket: ${event.ticket_url}\n\n`;
+  events.sort((a, b) => {
+    if (a.event_date < b.event_date) return -1;
+    if (a.event_date > b.event_date) return 1;
+    return b.playcount - a.playcount;
   });
 
-  body += 'To stop alerts, open your Google Sheet and set alerts_active to FALSE in the Config tab.\n';
+  return events;
+}
+
+
+
+function getAttractionNames_(eventObj) {
+  const attractions = (((eventObj || {})._embedded || {}).attractions) || [];
+  return attractions.map(a => a.name).filter(Boolean);
+}
+
+function isStrongArtistMatch_(targetArtist, eventName, attractionNames) {
+  const target = normalizeArtistName_(targetArtist);
+  const title = normalizeArtistName_(eventName || '');
+  const attrs = (attractionNames || []).map(a => normalizeArtistName_(a));
+
+  if (attrs.includes(target)) return true;
+  if (title === target) return true;
+  if (title.startsWith(target + ' ')) return true;
+  if (title.endsWith(' ' + target)) return true;
+  if (title.startsWith(target + ':')) return true;
+  if (title.startsWith(target + ' -')) return true;
+
+  return false;
+}
+
+function sendAlertEmail_(settings, events) {
+
+  const artistNames = events
+    .map(e => titleCase_(e.artist_name))
+    .slice(0, 3)
+    .join(', ');
+
+  const subject =
+    `🎵 ${artistNames}${events.length > 3 ? ' +' + (events.length - 3) : ''} live in ${settings.city} 🎤`;
+
+  let body = '';
+
+  body += `🎶 Good news!\n\n`;
+  body += `We found ${events.length} upcoming concert${events.length > 1 ? 's' : ''} in ${settings.city} from artists you listen to.\n\n`;
+
+  events.forEach((event, index) => {
+
+    body += `🎤 ${index + 1}. ${titleCase_(event.artist_name)}\n`;
+    body += `📅 Date: ${event.event_date}\n`;
+    body += `📍 Venue: ${event.venue}\n`;
+
+    if (event.ticket_url) {
+      body += `🎟 Tickets: ${event.ticket_url}\n`;
+    }
+
+    body += `\n`;
+  });
+
+  body += `Enjoy the show 🎧\n\n`;
+  body += `---\n`;
+  body += `To stop alerts, set alerts_active = FALSE in your Google Sheet Config tab.\n`;
 
   MailApp.sendEmail({
     to: settings.email,
-    subject: `Concert alerts: ${events.length} new match${events.length > 1 ? 'es' : ''} in ${settings.city}`,
+    subject: subject,
     body: body,
   });
 }
@@ -369,7 +443,7 @@ function getConfig_() {
     lastfm_username: String(config.lastfm_username || '').trim(),
     city: String(config.city || '').trim(),
     email: String(config.email || '').trim(),
-    min_listens: Number(config.min_listens || 50),
+    min_listens: Number(config.min_listens || 25),
     alerts_active: toBoolean_(config.alerts_active),
   };
 }
@@ -385,7 +459,7 @@ function ensureSheets_() {
     configSheet.appendRow(['lastfm_username', '']);
     configSheet.appendRow(['city', 'Berlin']);
     configSheet.appendRow(['email', '']);
-    configSheet.appendRow(['min_listens', 50]);
+    configSheet.appendRow(['min_listens', 25]);
     configSheet.appendRow(['alerts_active', true]);
   }
 
