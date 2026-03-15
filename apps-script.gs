@@ -24,24 +24,24 @@ function runAlerts() {
     return;
   }
 
-  if (!settings.lastfm_username || !settings.city || !settings.email) {
-    throw new Error('Missing required config values: lastfm_username, city, or email');
-  }
+if (!settings.lastfm_username || !settings.cities.length || !settings.email) {
+  throw new Error('Missing required config values: lastfm_username, city, or email');
+}
 
-  const minListens = settings.min_listens;
+const minListens = settings.min_listens;
 
-  Logger.log(`Running alerts for ${settings.lastfm_username} in ${settings.city}`);
+Logger.log(`Running alerts for ${settings.lastfm_username} in ${settings.cities.join(', ')}`);
 
-  const qualifiedArtists = getQualifiedArtists_(settings.lastfm_username, minListens);
-  Logger.log(`Qualified artists found: ${qualifiedArtists.length}`);
+const qualifiedArtists = getQualifiedArtists_(settings.lastfm_username, minListens);
+Logger.log(`Qualified artists found: ${qualifiedArtists.length}`);
 
-  if (!qualifiedArtists.length) {
-    clearMatches_();
-    Logger.log('No qualified artists found.');
-    return;
-  }
+if (!qualifiedArtists.length) {
+  clearMatches_();
+  Logger.log('No qualified artists found.');
+  return;
+}
 
-const events = findAllEvents_(settings.city, qualifiedArtists);
+const events = findAllEvents_(settings.cities, qualifiedArtists);
   Logger.log(`Events found: ${events.length}`);
 
   writeMatches_(events);
@@ -80,8 +80,12 @@ function testEvents() {
   const settings = getConfig_();
   const minListens = settings.min_listens;
 
+  Logger.log(`Using min_listens: ${minListens}`);
+  Logger.log(`Spreadsheet name: ${SpreadsheetApp.getActiveSpreadsheet().getName()}`);
+  Logger.log(`Spreadsheet URL: ${SpreadsheetApp.getActiveSpreadsheet().getUrl()}`);
+
   const artists = getQualifiedArtists_(settings.lastfm_username, minListens);
-  const events = findAllEvents_(settings.city, artists);
+  const events = findAllEvents_(settings.cities, artists);
 
   Logger.log(`Artists checked: ${artists.length}`);
   Logger.log(`Events found: ${events.length}`);
@@ -93,13 +97,14 @@ function testEmail() {
   const settings = getConfig_();
 
   const fakeEvents = [{
-    event_key: 'test artist|2026-05-01|test venue|ticketmaster',
-    artist_name: 'Test Artist',
-    playcount: 99,
-    event_date: '2026-05-01',
-    venue: 'Test Venue',
-    source: 'ticketmaster',
-    ticket_url: 'https://example.com'
+  event_key: 'test artist|2026-05-01|test city|test venue|ticketmaster',
+  artist_name: 'Test Artist',
+  playcount: 99,
+  event_date: '2026-05-01',
+  city: 'Berlin',
+  venue: 'Test Venue',
+  source: 'ticketmaster',
+  ticket_url: 'https://example.com'
   }];
 
   sendAlertEmail_(settings, fakeEvents);
@@ -209,51 +214,56 @@ function getWeeklyArtistChart_(username, apiKey, fromTs, toTs) {
   return (((data || {}).weeklyartistchart || {}).artist) || [];
 }
 
-function findTicketmasterEvents_(city, qualifiedArtists) {
+function findTicketmasterEvents_(cities, qualifiedArtists) {
   const apiKey = getScriptProperty_('TM_API_KEY');
   const allEvents = [];
   const seen = {};
 
-  qualifiedArtists.forEach(artist => {
-    const params = {
-      apikey: apiKey,
-      keyword: artist.artist_name,
-      city: city,
-      size: CONFIG.TM_SIZE,
-      sort: 'date,asc',
-    };
+  cities.forEach(city => {
+    qualifiedArtists.forEach(artist => {
+      const params = {
+        apikey: apiKey,
+        keyword: artist.artist_name,
+        city: city,
+        size: CONFIG.TM_SIZE,
+        sort: 'date,asc',
+      };
 
-    const data = fetchJson_(CONFIG.TM_BASE_URL, params);
-    const events = (((data || {})._embedded || {}).events) || [];
+      const data = fetchJson_(CONFIG.TM_BASE_URL, params);
+      const events = (((data || {})._embedded || {}).events) || [];
 
-    events.forEach(ev => {
-      const eventDate = (((ev.dates || {}).start || {}).localDate) || '';
-      const venue = ((((ev._embedded || {}).venues || [])[0] || {}).name) || '';
-      const ticketUrl = ev.url || '';
-      const eventName = ev.name || '';
-      const attractionNames = getAttractionNames_(ev);
+      events.forEach(ev => {
+        const eventDate = (((ev.dates || {}).start || {}).localDate) || '';
+        const venueObj = ((((ev._embedded || {}).venues || [])[0] || {}));
+        const venue = venueObj.name || '';
+        const eventCity = (((venueObj.city || {}).name) || city || '');
+        const ticketUrl = ev.url || '';
+        const eventName = ev.name || '';
+        const attractionNames = getAttractionNames_(ev);
 
-      if (!eventDate || !venue) return;
-      if (!isStrongArtistMatch_(artist.artist_name, eventName, attractionNames)) return;
+        if (!eventDate || !venue) return;
+        if (!isStrongArtistMatch_(artist.artist_name, eventName, attractionNames)) return;
 
-      const eventKey = buildEventKey_(artist.artist_name, eventDate, venue, 'ticketmaster');
+        const eventKey = buildEventKey_(artist.artist_name, eventDate, venue, eventCity, 'ticketmaster');
 
-      if (seen[eventKey]) return;
-      seen[eventKey] = true;
+        if (seen[eventKey]) return;
+        seen[eventKey] = true;
 
-      allEvents.push({
-        checked_at: new Date(),
-        artist_name: artist.artist_name,
-        playcount: artist.playcount,
-        event_date: eventDate,
-        venue: venue,
-        source: 'ticketmaster',
-        ticket_url: ticketUrl,
-        event_key: eventKey,
+        allEvents.push({
+          checked_at: new Date(),
+          artist_name: artist.artist_name,
+          playcount: artist.playcount,
+          event_date: eventDate,
+          city: eventCity,
+          venue: venue,
+          source: 'ticketmaster',
+          ticket_url: ticketUrl,
+          event_key: eventKey,
+        });
       });
-    });
 
-    Utilities.sleep(200);
+      Utilities.sleep(200);
+    });
   });
 
   allEvents.sort((a, b) => {
@@ -263,6 +273,18 @@ function findTicketmasterEvents_(city, qualifiedArtists) {
   });
 
   return allEvents;
+}
+
+function findAllEvents_(cities, qualifiedArtists) {
+  const events = findTicketmasterEvents_(cities, qualifiedArtists);
+
+  events.sort((a, b) => {
+    if (a.event_date < b.event_date) return -1;
+    if (a.event_date > b.event_date) return 1;
+    return b.playcount - a.playcount;
+  });
+
+  return events;
 }
 
 function findAllEvents_(city, qualifiedArtists) {
@@ -300,42 +322,95 @@ function isStrongArtistMatch_(targetArtist, eventName, attractionNames) {
 }
 
 function sendAlertEmail_(settings, events) {
+  const groupedEvents = groupEventsByArtist_(events);
+  const uniqueArtists = groupedEvents.map(group => titleCase_(group.artist_name));
 
-  const artistNames = events
-    .map(e => titleCase_(e.artist_name))
+  const artistNames = uniqueArtists
     .slice(0, 3)
     .join(', ');
 
   const subject =
-    `🎵 ${artistNames}${events.length > 3 ? ' +' + (events.length - 3) : ''} live in ${settings.city} 🎤`;
+    `🎵 ${artistNames}${uniqueArtists.length > 3 ? ' +' + (uniqueArtists.length - 3) : ''} live in ${settings.city} 🎤`;
 
-  let body = '';
+  let htmlBody = '';
+  htmlBody += `<div style="font-family: Arial, sans-serif; color: #222; line-height: 1.5; max-width: 680px; margin: 0 auto;">`;
+  htmlBody += `<h2 style="margin-bottom: 8px;">🎶 Concert alert</h2>`;
+  htmlBody += `<p style="margin-top: 0; font-size: 15px;">We found <strong>${events.length}</strong> upcoming concert${events.length > 1 ? 's' : ''} in <strong>${escapeHtml_(settings.city)}</strong> from artists you listen to.</p>`;
 
-  body += `🎶 Good news!\n\n`;
-  body += `We found ${events.length} upcoming concert${events.length > 1 ? 's' : ''} in ${settings.city} from artists you listen to.\n\n`;
+  groupedEvents.forEach(group => {
+    const artistTitle = titleCase_(group.artist_name);
+    const totalPlaycount = group.events[0].playcount;
 
-  events.forEach((event, index) => {
+    htmlBody += `<div style="border: 1px solid #e6e6e6; border-radius: 12px; padding: 16px; margin: 14px 0; background: #fafafa;">`;
+    htmlBody += `<div style="font-size: 18px; font-weight: 700; margin-bottom: 6px;">🎤 ${escapeHtml_(artistTitle)}</div>`;
+    htmlBody += `<div style="margin: 0 0 12px 0; color: #555;"><strong>🎧 Your listens:</strong> ${totalPlaycount}</div>`;
 
-    body += `🎤 ${index + 1}. ${titleCase_(event.artist_name)}\n`;
-    body += `📅 Date: ${event.event_date}\n`;
-    body += `📍 Venue: ${event.venue}\n`;
+    group.events.forEach(event => {
+      htmlBody += `<div style="padding: 12px 0; border-top: 1px solid #ececec;">`;
+      htmlBody += `<div style="margin: 0 0 4px 0;"><strong>📅 Date:</strong> ${escapeHtml_(formatEventDate_(event.event_date))}</div>`;
+      htmlBody += `<div style="margin: 0 0 8px 0;"><strong>📍 Location:</strong> ${escapeHtml_(event.city)} — ${escapeHtml_(event.venue)}</div>`;
 
-    if (event.ticket_url) {
-      body += `🎟 Tickets: ${event.ticket_url}\n`;
-    }
+     htmlBody += `<div style="margin-top: 10px;">`;
 
-    body += `\n`;
+      if (event.ticket_url) {
+       htmlBody += `<a href="${escapeHtml_(event.ticket_url)}" style="display: inline-block; padding: 10px 14px; background: #111; color: #fff; text-decoration: none; border-radius: 8px; margin-right: 8px;">View tickets</a>`;
+       } else {
+      htmlBody += `<div style="margin: 0 0 8px 0; font-size: 13px; color: #777;">Ticket info not found yet.</div>`;
+}
+
+htmlBody += `<a href="${escapeHtml_(buildGoogleCalendarUrl_(event))}" style="display: inline-block; padding: 10px 14px; background: #f1f1f1; color: #111; text-decoration: none; border-radius: 8px;">Add to calendar</a>`;
+htmlBody += `</div>`;
+
+      htmlBody += `</div>`;
+    });
+
+    htmlBody += `</div>`;
   });
 
-  body += `Enjoy the show 🎧\n\n`;
-  body += `---\n`;
-  body += `To stop alerts, set alerts_active = FALSE in your Google Sheet Config tab.\n`;
+  htmlBody += `<p style="margin-top: 24px;">Hope there’s something good in here for you ✨</p>`;
+  htmlBody += `<p style="font-size: 12px; color: #666; margin-top: 24px;">To stop alerts, set <strong>alerts_active = FALSE</strong> in your Google Sheet Config tab.</p>`;
+  htmlBody += `</div>`;
+
+  let plainBody = '';
+  plainBody += `Concert alert\n\n`;
+  plainBody += `We found ${events.length} upcoming concert${events.length > 1 ? 's' : ''} in ${settings.city} from artists you listen to.\n\n`;
+
+  groupedEvents.forEach(group => {
+    plainBody += `${titleCase_(group.artist_name)}\n`;
+    plainBody += `Your listens: ${group.events[0].playcount}\n`;
+
+    group.events.forEach(event => {
+      plainBody += `- ${formatEventDate_(event.event_date)} — ${event.city} — ${event.venue}\n`;
+
+if (event.ticket_url) {
+  plainBody += `  Tickets: ${event.ticket_url}\n`;
+} else {
+  plainBody += `  Ticket info not found yet.\n`;
+}
+
+plainBody += `  Add to calendar: ${buildGoogleCalendarUrl_(event)}\n`;
+    });
+
+    plainBody += `\n`;
+  });
+
+  plainBody += `Hope there’s something good in here for you.\n`;
 
   MailApp.sendEmail({
     to: settings.email,
     subject: subject,
-    body: body,
+    body: plainBody,
+    htmlBody: htmlBody,
   });
+}
+
+function escapeHtml_(text) {
+  return String(text || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function recordSentAlerts_(events) {
@@ -383,6 +458,7 @@ function writeMatches_(events) {
     'artist_name',
     'playcount',
     'event_date',
+    'city',
     'venue',
     'source',
     'ticket_url',
@@ -396,6 +472,7 @@ function writeMatches_(events) {
     event.artist_name,
     event.playcount,
     event.event_date,
+    event.city,
     event.venue,
     event.source,
     event.ticket_url,
@@ -414,6 +491,7 @@ function clearMatches_() {
     'artist_name',
     'playcount',
     'event_date',
+    'city',
     'venue',
     'source',
     'ticket_url',
@@ -445,13 +523,23 @@ function getConfig_() {
   Logger.log(`Raw min_listens from sheet: ${rawMinListens}`);
   Logger.log(`Parsed min_listens: ${parsedMinListens}`);
 
+  const cities = parseCities_(config.city);
+
   return {
     lastfm_username: String(config.lastfm_username || '').trim(),
     city: String(config.city || '').trim(),
+    cities: cities,
     email: String(config.email || '').trim(),
     min_listens: parsedMinListens,
     alerts_active: toBoolean_(config.alerts_active),
   };
+}
+
+function parseCities_(value) {
+  return String(value || '')
+    .split(',')
+    .map(city => city.trim())
+    .filter(Boolean);
 }
 
 function parseNumberOrDefault_(value, defaultValue) {
@@ -498,16 +586,17 @@ function ensureSheets_() {
   if (!matchesSheet) matchesSheet = ss.insertSheet(CONFIG.MATCHES_SHEET);
 
   if (matchesSheet.getLastRow() === 0) {
-    matchesSheet.appendRow([
-      'checked_at',
-      'artist_name',
-      'playcount',
-      'event_date',
-      'venue',
-      'source',
-      'ticket_url',
-      'event_key',
-    ]);
+  matchesSheet.appendRow([
+    'checked_at',
+    'artist_name',
+    'playcount',
+    'event_date',
+    'city',
+    'venue',
+    'source',
+    'ticket_url',
+    'event_key',
+  ]);
   }
 }
 
@@ -526,28 +615,42 @@ function fetchJson_(baseUrl, params) {
 
   const url = `${baseUrl}?${query}`;
 
-  const response = UrlFetchApp.fetch(url, {
-    method: 'get',
-    muteHttpExceptions: true,
-    headers: {
-      Accept: 'application/json',
-    },
-  });
+  const maxRetries = 5;
 
-  const code = response.getResponseCode();
-  const text = response.getContentText();
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    const response = UrlFetchApp.fetch(url, {
+      method: 'get',
+      muteHttpExceptions: true,
+      headers: {
+        Accept: 'application/json',
+      },
+    });
 
-  if (code < 200 || code >= 300) {
+    const code = response.getResponseCode();
+    const text = response.getContentText();
+
+    if (code >= 200 && code < 300) {
+      return JSON.parse(text);
+    }
+
+    if (code === 429) {
+      const waitMs = attempt * 1500;
+      Logger.log(`HTTP 429 received. Waiting ${waitMs}ms before retry ${attempt}/${maxRetries}. URL: ${url}`);
+      Utilities.sleep(waitMs);
+      continue;
+    }
+
     throw new Error(`HTTP ${code}: ${text}`);
   }
 
-  return JSON.parse(text);
+  throw new Error(`HTTP 429: Rate limit exceeded after retries. URL: ${url}`);
 }
 
-function buildEventKey_(artistName, eventDate, venue, source) {
+function buildEventKey_(artistName, eventDate, venue, city, source) {
   return [
     normalizeArtistName_(artistName),
     String(eventDate || '').trim(),
+    String(city || '').trim().toLowerCase(),
     String(venue || '').trim().toLowerCase(),
     String(source || '').trim().toLowerCase(),
   ].join('|');
@@ -573,4 +676,110 @@ function titleCase_(text) {
     .split(' ')
     .map(part => part ? part.charAt(0).toUpperCase() + part.slice(1) : part)
     .join(' ');
+}
+
+function groupEventsByArtist_(events) {
+  const grouped = {};
+
+  events.forEach(event => {
+    const artistKey = normalizeArtistName_(event.artist_name);
+
+    if (!grouped[artistKey]) {
+      grouped[artistKey] = {
+        artist_name: event.artist_name,
+        events: [],
+      };
+    }
+
+    grouped[artistKey].events.push(event);
+  });
+
+  const groups = Object.keys(grouped).map(key => {
+    const group = grouped[key];
+
+    group.events.sort((a, b) => {
+      if (a.event_date < b.event_date) return -1;
+      if (a.event_date > b.event_date) return 1;
+      return 0;
+    });
+
+    return group;
+  });
+
+  groups.sort((a, b) => {
+    const aDate = a.events[0].event_date;
+    const bDate = b.events[0].event_date;
+
+    if (aDate < bDate) return -1;
+    if (aDate > bDate) return 1;
+
+    return b.events[0].playcount - a.events[0].playcount;
+  });
+
+  return groups;
+}
+
+function formatEventDate_(dateString) {
+  if (!dateString) return '';
+
+  const parts = String(dateString).split('-');
+  if (parts.length !== 3) return dateString;
+
+  const year = Number(parts[0]);
+  const month = Number(parts[1]) - 1;
+  const day = Number(parts[2]);
+
+  const date = new Date(year, month, day);
+
+  return Utilities.formatDate(date, Session.getScriptTimeZone(), 'MMM d, yyyy');
+}
+
+function buildGoogleCalendarUrl_(event) {
+  const startDate = formatCalendarDate_(event.event_date);
+  const endDate = formatCalendarDate_(addDays_(event.event_date, 1));
+
+  const title = `${titleCase_(event.artist_name)} live`;
+  const details = event.ticket_url
+    ? `Tickets: ${event.ticket_url}`
+    : 'Ticket info not found yet.';
+  const location = [event.city, event.venue].filter(Boolean).join(' — ');
+
+  const params = {
+    action: 'TEMPLATE',
+    text: title,
+    dates: `${startDate}/${endDate}`,
+    details: details,
+    location: location,
+  };
+
+  const query = Object.keys(params)
+    .map(key => `${encodeURIComponent(key)}=${encodeURIComponent(params[key])}`)
+    .join('&');
+
+  return `https://calendar.google.com/calendar/render?${query}`;
+}
+
+function formatCalendarDate_(dateString) {
+  const parts = String(dateString || '').split('-');
+  if (parts.length !== 3) return '';
+
+  const year = parts[0];
+  const month = parts[1];
+  const day = parts[2];
+
+  return `${year}${month}${day}`;
+}
+
+function addDays_(dateString, daysToAdd) {
+  const parts = String(dateString || '').split('-');
+  if (parts.length !== 3) return dateString;
+
+  const year = Number(parts[0]);
+  const month = Number(parts[1]) - 1;
+  const day = Number(parts[2]);
+
+  const date = new Date(year, month, day);
+  date.setDate(date.getDate() + daysToAdd);
+
+  return Utilities.formatDate(date, Session.getScriptTimeZone(), 'yyyy-MM-dd');
 }
