@@ -218,15 +218,9 @@ function findTicketmasterEvents_(cities, qualifiedArtists) {
   const apiKey = getScriptProperty_('TM_API_KEY');
   const allEvents = [];
   const seen = {};
-  let rateLimitHit = false;
-  let consecutive429s = 0;
 
-  for (const city of cities) {
-    if (rateLimitHit) break;
-
-    for (const artist of qualifiedArtists) {
-      if (rateLimitHit) break;
-
+  cities.forEach(city => {
+    qualifiedArtists.forEach(artist => {
       const params = {
         apikey: apiKey,
         keyword: artist.artist_name,
@@ -238,8 +232,6 @@ function findTicketmasterEvents_(cities, qualifiedArtists) {
       try {
         const data = fetchJson_(CONFIG.TM_BASE_URL, params);
         const events = (((data || {})._embedded || {}).events) || [];
-
-        consecutive429s = 0;
 
         events.forEach(ev => {
           const eventDate = (((ev.dates || {}).start || {}).localDate) || '';
@@ -272,22 +264,12 @@ function findTicketmasterEvents_(cities, qualifiedArtists) {
         });
 
       } catch (error) {
-        Logger.log(`Ticketmaster search failed for ${artist.artist_name} in ${city}: ${error.message}`);
-
-        if (String(error.message).indexOf('HTTP 429') !== -1) {
-          consecutive429s++;
-          Utilities.sleep(10000);
-
-          if (consecutive429s >= 3) {
-            Logger.log('Ticketmaster appears to be rate-limiting all requests. Stopping Ticketmaster search for this run.');
-            rateLimitHit = true;
-          }
-        }
+        Logger.log(`Skipping Ticketmaster search for ${artist.artist_name} in ${city}: ${error.message}`);
       }
 
-      Utilities.sleep(getTicketmasterDelayMs_());
-    }
-  }
+      Utilities.sleep(250);
+    });
+  });
 
   allEvents.sort((a, b) => {
     if (a.event_date < b.event_date) return -1;
@@ -651,10 +633,6 @@ function fetchJson_(baseUrl, params) {
 
   if (code >= 200 && code < 300) {
     return JSON.parse(text);
-  }
-
-  if (code === 429) {
-    throw new Error(`HTTP 429: Rate limit exceeded. URL: ${url}`);
   }
 
   throw new Error(`HTTP ${code}: ${text}`);
