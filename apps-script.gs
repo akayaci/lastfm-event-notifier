@@ -218,9 +218,15 @@ function findTicketmasterEvents_(cities, qualifiedArtists) {
   const apiKey = getScriptProperty_('TM_API_KEY');
   const allEvents = [];
   const seen = {};
+  let rateLimitHit = false;
+  let consecutive429s = 0;
 
-  cities.forEach(city => {
-    qualifiedArtists.forEach(artist => {
+  for (const city of cities) {
+    if (rateLimitHit) break;
+
+    for (const artist of qualifiedArtists) {
+      if (rateLimitHit) break;
+
       const params = {
         apikey: apiKey,
         keyword: artist.artist_name,
@@ -229,42 +235,59 @@ function findTicketmasterEvents_(cities, qualifiedArtists) {
         sort: 'date,asc',
       };
 
-      const data = fetchJson_(CONFIG.TM_BASE_URL, params);
-      const events = (((data || {})._embedded || {}).events) || [];
+      try {
+        const data = fetchJson_(CONFIG.TM_BASE_URL, params);
+        const events = (((data || {})._embedded || {}).events) || [];
 
-      events.forEach(ev => {
-        const eventDate = (((ev.dates || {}).start || {}).localDate) || '';
-        const venueObj = ((((ev._embedded || {}).venues || [])[0] || {}));
-        const venue = venueObj.name || '';
-        const eventCity = (((venueObj.city || {}).name) || city || '');
-        const ticketUrl = ev.url || '';
-        const eventName = ev.name || '';
-        const attractionNames = getAttractionNames_(ev);
+        consecutive429s = 0;
 
-        if (!eventDate || !venue) return;
-        if (!isStrongArtistMatch_(artist.artist_name, eventName, attractionNames)) return;
+        events.forEach(ev => {
+          const eventDate = (((ev.dates || {}).start || {}).localDate) || '';
+          const venueObj = ((((ev._embedded || {}).venues || [])[0] || {}));
+          const venue = venueObj.name || '';
+          const eventCity = (((venueObj.city || {}).name) || city || '');
+          const ticketUrl = ev.url || '';
+          const eventName = ev.name || '';
+          const attractionNames = getAttractionNames_(ev);
 
-        const eventKey = buildEventKey_(artist.artist_name, eventDate, venue, eventCity, 'ticketmaster');
+          if (!eventDate || !venue) return;
+          if (!isStrongArtistMatch_(artist.artist_name, eventName, attractionNames)) return;
 
-        if (seen[eventKey]) return;
-        seen[eventKey] = true;
+          const eventKey = buildEventKey_(artist.artist_name, eventDate, venue, eventCity, 'ticketmaster');
 
-        allEvents.push({
-          checked_at: new Date(),
-          artist_name: artist.artist_name,
-          playcount: artist.playcount,
-          event_date: eventDate,
-          city: eventCity,
-          venue: venue,
-          source: 'ticketmaster',
-          ticket_url: ticketUrl,
-          event_key: eventKey,
+          if (seen[eventKey]) return;
+          seen[eventKey] = true;
+
+          allEvents.push({
+            checked_at: new Date(),
+            artist_name: artist.artist_name,
+            playcount: artist.playcount,
+            event_date: eventDate,
+            city: eventCity,
+            venue: venue,
+            source: 'ticketmaster',
+            ticket_url: ticketUrl,
+            event_key: eventKey,
+          });
         });
-      });
 
-      Utilities.sleep(200);
-    });
-  });
+      } catch (error) {
+        Logger.log(`Ticketmaster search failed for ${artist.artist_name} in ${city}: ${error.message}`);
+
+        if (String(error.message).indexOf('HTTP 429') !== -1) {
+          consecutive429s++;
+          Utilities.sleep(10000);
+
+          if (consecutive429s >= 3) {
+            Logger.log('Ticketmaster appears to be rate-limiting all requests. Stopping Ticketmaster search for this run.');
+            rateLimitHit = true;
+          }
+        }
+      }
+
+      Utilities.sleep(getTicketmasterDelayMs_());
+    }
+  }
 
   allEvents.sort((a, b) => {
     if (a.event_date < b.event_date) return -1;
@@ -615,35 +638,30 @@ function fetchJson_(baseUrl, params) {
 
   const url = `${baseUrl}?${query}`;
 
-  const maxRetries = 5;
+  const response = UrlFetchApp.fetch(url, {
+    method: 'get',
+    muteHttpExceptions: true,
+    headers: {
+      Accept: 'application/json',
+    },
+  });
 
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    const response = UrlFetchApp.fetch(url, {
-      method: 'get',
-      muteHttpExceptions: true,
-      headers: {
-        Accept: 'application/json',
-      },
-    });
+  const code = response.getResponseCode();
+  const text = response.getContentText();
 
-    const code = response.getResponseCode();
-    const text = response.getContentText();
-
-    if (code >= 200 && code < 300) {
-      return JSON.parse(text);
-    }
-
-    if (code === 429) {
-      const waitMs = attempt * 1500;
-      Logger.log(`HTTP 429 received. Waiting ${waitMs}ms before retry ${attempt}/${maxRetries}. URL: ${url}`);
-      Utilities.sleep(waitMs);
-      continue;
-    }
-
-    throw new Error(`HTTP ${code}: ${text}`);
+  if (code >= 200 && code < 300) {
+    return JSON.parse(text);
   }
 
-  throw new Error(`HTTP 429: Rate limit exceeded after retries. URL: ${url}`);
+  if (code === 429) {
+    throw new Error(`HTTP 429: Rate limit exceeded. URL: ${url}`);
+  }
+
+  throw new Error(`HTTP ${code}: ${text}`);
+}
+
+function getTicketmasterDelayMs_() {
+  return 2000 + Math.floor(Math.random() * 1500);
 }
 
 function buildEventKey_(artistName, eventDate, venue, city, source) {
